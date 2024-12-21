@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>3D Визуализация Змейки</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #ffffff; }
+        #info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(255, 255, 255, 0.8);
+            padding: 10px;
+            border-radius: 4px;
+            font-family: Arial, sans-serif;
+            z-index: 1;
+        }
+        #blocker {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 2;
+        }
+        #instructions {
+            font-size: 24px;
+            color: white;
+            text-align: center;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="blocker">
+        <div id="instructions">
+            Кликните здесь, чтобы начать<br>
+            (Используйте WASD для перемещения, Shift для подъёма, Space для спуска, мышь для обзора)
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/three@0.146.0/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.146.0/examples/js/controls/PointerLockControls.js"></script>
+
+    <script>
+        if (typeof THREE === 'undefined') {
+            alert('Three.js не загружен. Проверьте подключение библиотеки.');
+        }
+
+        const API_URL = 'https://games-test.datsteam.dev/play/snake3d/player/move'; 
+        const AUTH_TOKEN = '23d72477-01f2-4137-b526-220ba1ad9e6c'; 
+
+        const scene = new THREE.Scene();
+
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(50, 50, 50);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setClearColor(0xffffff, 1);
+        document.body.appendChild(renderer.domElement);
+
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
+        scene.add(ambientLight);
+
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.5);
+        directionalLight.position.set(1, 1, 1).normalize();
+        scene.add(directionalLight);
+
+        const gridHelper = new THREE.GridHelper(100, 30, 0x000000, 0x000000);
+        gridHelper.rotation.x = Math.PI / 2;
+        gridHelper.name = 'gridHelper';
+        scene.add(gridHelper);
+
+        const snakesGroup = new THREE.Group();
+        scene.add(snakesGroup);
+
+        const enemiesGroup = new THREE.Group();
+        scene.add(enemiesGroup);
+
+        const fencesGroup = new THREE.Group();
+        scene.add(fencesGroup);
+
+        const foodGroup = new THREE.Group();
+        scene.add(foodGroup);
+
+        const materials = {
+            snake1: new THREE.MeshLambertMaterial({ color: 0xffc0cb }), 
+            snake2: new THREE.MeshLambertMaterial({ color: 0x00ff00 }), 
+            snake3: new THREE.MeshLambertMaterial({ color: 0x000000 }), 
+            enemySnake: new THREE.MeshLambertMaterial({ color: 0xff0000 }), 
+            fence: new THREE.MeshLambertMaterial({ color: 0x808080 }), 
+            food: new THREE.MeshLambertMaterial({ color: 0xffa500 }), 
+            specialFood: {
+                suspicious: new THREE.MeshLambertMaterial({ color: 0x800080 }), 
+                golden: new THREE.MeshLambertMaterial({ color: 0xFFD700 }) 
+            }
+        };
+
+        const objects = {
+            snakes: new Map(),
+            enemies: new Map(),
+            fences: new Map(),
+            food: new Map(),
+            specialFood: new Map()
+        };
+
+        function createCube(position, material) {
+            const geometry = new THREE.BoxGeometry(1, 1, 1);
+            const cube = new THREE.Mesh(geometry, material);
+            cube.position.set(position[0], position[1], position[2]);
+            return cube;
+        }
+
+        const blocker = document.getElementById('blocker');
+        const instructions = document.getElementById('instructions');
+
+        const controls = new THREE.PointerLockControls(camera, document.body);
+
+        instructions.addEventListener('click', () => {
+            controls.lock();
+        }, false);
+
+        controls.addEventListener('lock', () => {
+            blocker.style.display = 'none';
+        });
+
+        controls.addEventListener('unlock', () => {
+            blocker.style.display = 'flex';
+        });
+
+        scene.add(controls.getObject());
+
+        let moveForward = false;
+        let moveBackward = false;
+        let moveLeft = false;
+        let moveRight = false;
+        let moveUp = false;
+        let moveDown = false;
+
+        const velocity = new THREE.Vector3();
+        const direction = new THREE.Vector3();
+
+        const onKeyDown = function (event) {
+            switch (event.code) {
+                case 'ArrowUp':
+                case 'KeyW':
+                    moveForward = true;
+                    break;
+                case 'ArrowLeft':
+                case 'KeyA':
+                    moveLeft = true;
+                    break;
+                case 'ArrowDown':
+                case 'KeyS':
+                    moveBackward = true;
+                    break;
+                case 'ArrowRight':
+                case 'KeyD':
+                    moveRight = true;
+                    break;
+                case 'ShiftLeft':
+                case 'ShiftRight':
+                    moveUp = true;
+                    break;
+                case 'Space':
+                    moveDown = true;
+                    break;
+            }
+        };
+
+        const onKeyUp = function (event) {
+            switch (event.code) {
+                case 'ArrowUp':
+                case 'KeyW':
+                    moveForward = false;
+                    break;
+                case 'ArrowLeft':
+                case 'KeyA':
+                    moveLeft = false;
+                    break;
+                case 'ArrowDown':
+                case 'KeyS':
+                    moveBackward = false;
+                    break;
+                case 'ArrowRight':
+                case 'KeyD':
+                    moveRight = false;
+                    break;
+                case 'ShiftLeft':
+                case 'ShiftRight':
+                    moveUp = false;
+                    break;
+                case 'Space':
+                    moveDown = false;
+                    break;
+            }
+        };
+
+        document.addEventListener('keydown', onKeyDown, false);
+        document.addEventListener('keyup', onKeyUp, false);
+
+        function updateGrid(mapSize) {
+            const gridHelper = scene.getObjectByName('gridHelper');
+            if (gridHelper) {
+                scene.remove(gridHelper);
+                gridHelper.geometry.dispose();
+                gridHelper.material.dispose();
+            }
+            const size = Math.max(...mapSize);
+            const divisions = 30;
+            const newGridHelper = new THREE.GridHelper(size, divisions, 0x000000, 0x000000);
+            newGridHelper.rotation.x = Math.PI / 2;
+            newGridHelper.name = 'gridHelper';
+            scene.add(newGridHelper);
+        }
+
+        function updateOrCreateObject(map, key, position, material, group) {
+            if (map.has(key)) {
+                const obj = map.get(key);
+                obj.position.set(position[0], position[1], position[2]);
+            } else {
+                const cube = createCube(position, material);
+                group.add(cube);
+                map.set(key, cube);
+            }
+        }
+
+        function removeOldObjects(map, newKeys, group) {
+            for (let key of map.keys()) {
+                if (!newKeys.has(key)) {
+                    const obj = map.get(key);
+                    group.remove(obj);
+                    if (obj.geometry) obj.geometry.dispose();
+                    if (obj.material) obj.material.dispose();
+                    map.delete(key);
+                }
+            }
+        }
+
+        function updateScene(data) {
+            if (data.mapSize && Array.isArray(data.mapSize)) {
+                updateGrid(data.mapSize);
+            } else {
+                console.warn('mapSize отсутствует или не является массивом');
+            }
+
+            if (data.fences && Array.isArray(data.fences)) {
+                const newFences = new Set();
+                data.fences.forEach(fence => {
+                    if (Array.isArray(fence) && fence.length === 3) {
+                        const key = fence.join(',');
+                        newFences.add(key);
+                        updateOrCreateObject(objects.fences, key, fence, materials.fence, fencesGroup);
+                    } else {
+                        console.warn('Некорректные данные для fence:', fence);
+                    }
+                });
+                removeOldObjects(objects.fences, newFences, fencesGroup);
+            } else {
+                console.warn('fences отсутствуют или не являются массивом');
+            }
+
+            if (data.snakes && Array.isArray(data.snakes)) {
+                const newSnakes = new Set();
+                data.snakes.forEach((snake, index) => {
+                    if (snake.geometry && Array.isArray(snake.geometry)) {
+                        snake.geometry.forEach(segment => {
+                            if (Array.isArray(segment) && segment.length === 3) {
+                                const key = `snake_${index}_${segment.join(',')}`;
+                                newSnakes.add(key);
+                                let material;
+                                switch(index) {
+                                    case 0:
+                                        material = materials.snake1;
+                                        break;
+                                    case 1:
+                                        material = materials.snake2;
+                                        break;
+                                    case 2:
+                                        material = materials.snake3;
+                                        break;
+                                    default:
+                                        material = materials.snake2;
+                                }
+                                updateOrCreateObject(objects.snakes, key, segment, material, snakesGroup);
+                            } else {
+                                console.warn('Некорректные данные для сегмента змеи:', segment);
+                            }
+                        });
+                    } else {
+                        console.warn('geometry змеи отсутствует или не является массивом:', snake);
+                    }
+                });
+                removeOldObjects(objects.snakes, newSnakes, snakesGroup);
+            } else {
+                console.warn('snakes отсутствуют или не являются массивом');
+            }
+
+            if (data.enemies && Array.isArray(data.enemies)) {
+                const newEnemies = new Set();
+                data.enemies.forEach((enemy, index) => {
+                    if (enemy.geometry && Array.isArray(enemy.geometry)) {
+                        enemy.geometry.forEach(segment => {
+                            if (Array.isArray(segment) && segment.length === 3) {
+                                const key = `enemy_${index}_${segment.join(',')}`;
+                                newEnemies.add(key);
+                                updateOrCreateObject(objects.enemies, key, segment, materials.enemySnake, enemiesGroup);
+                            } else {
+                                console.warn('Некорректные данные для сегмента врага:', segment);
+                            }
+                        });
+                    } else {
+                        console.warn('geometry врага отсутствует или не является массивом:', enemy);
+                    }
+                });
+                removeOldObjects(objects.enemies, newEnemies, enemiesGroup);
+            } else {
+                console.warn('enemies отсутствуют или не являются массивом');
+            }
+
+            if (data.food && Array.isArray(data.food)) {
+                const newFood = new Set();
+                data.food.forEach(food => {
+                    if (food.c && Array.isArray(food.c) && food.c.length === 3) {
+                        const key = `food_${food.c.join(',')}`;
+                        newFood.add(key);
+                        updateOrCreateObject(objects.food, key, food.c, materials.food, foodGroup);
+                    } else {
+                        console.warn('Некорректные данные для food:', food);
+                    }
+                });
+                removeOldObjects(objects.food, newFood, foodGroup);
+            } else {
+                console.warn('food отсутствует или не является массивом');
+            }
+
+            if (data.specialFood && typeof data.specialFood === 'object') {
+                if (data.specialFood.golden && Array.isArray(data.specialFood.golden)) {
+                    data.specialFood.golden.forEach(food => {
+                        if (Array.isArray(food) && food.length === 3) {
+                            const key = `golden_${food.join(',')}`;
+                            updateOrCreateObject(objects.specialFood, key, food, materials.specialFood.golden, foodGroup);
+                        } else {
+                            console.warn('Некорректные данные для golden food:', food);
+                        }
+                    });
+                } else {
+                    console.warn('specialFood.golden отсутствует или не является массивом');
+                }
+
+                if (data.specialFood.suspicious && Array.isArray(data.specialFood.suspicious)) {
+                    data.specialFood.suspicious.forEach(food => {
+                        if (Array.isArray(food) && food.length === 3) {
+                            const key = `suspicious_${food.join(',')}`;
+                            updateOrCreateObject(objects.specialFood, key, food, materials.specialFood.suspicious, foodGroup);
+                        } else {
+                            console.warn('Некорректные данные для suspicious food:', food);
+                        }
+                    });
+                } else {
+                    console.warn('specialFood.suspicious отсутствует или не является массивом');
+                }
+
+                const newSpecialFood = new Set([
+                    ...data.specialFood.golden?.map(f => `golden_${f.join(',')}`) || [],
+                    ...data.specialFood.suspicious?.map(f => `suspicious_${f.join(',')}`) || []
+                ]);
+                removeOldObjects(objects.specialFood, newSpecialFood, foodGroup);
+            } else {
+                console.warn('specialFood отсутствует или не является объектом');
+            }
+        }
+
+        async function fetchGameState() {
+            try {
+                const response = await fetch(API_URL, {
+                    method: 'POST',
+                    headers: {
+                        'X-Auth-Token': AUTH_TOKEN,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ snakes: [] })
+                });
+
+                if (!response.ok) {
+                    console.error('Ошибка при получении данных:', response.statusText);
+                    return;
+                }
+
+                const data = await response.json();
+                console.log('Полученные данные:', data);
+                updateScene(data);
+            } catch (error) {
+                console.error('Ошибка при запросе:', error);
+            }
+        }
+
+        const clock = new THREE.Clock();
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const delta = clock.getDelta();
+
+            velocity.x -= velocity.x * 10.0 * delta;
+            velocity.z -= velocity.z * 10.0 * delta;
+            velocity.y -= velocity.y * 10.0 * delta;
+
+            direction.x = Number(moveRight) - Number(moveLeft);
+            direction.z = Number(moveForward) - Number(moveBackward);
+            direction.y = Number(moveUp) - Number(moveDown);
+            direction.normalize();
+
+            const speed = 400.0;
+
+            if (moveForward || moveBackward) velocity.z -= direction.z * speed * delta;
+            if (moveLeft || moveRight) velocity.x -= direction.x * speed * delta;
+            if (moveUp || moveDown) velocity.y -= direction.y * speed * delta;
+
+            controls.moveRight(- velocity.x * delta);
+            controls.moveForward(- velocity.z * delta);
+            camera.position.y += velocity.y * delta;
+
+            renderer.render(scene, camera);
+        }
+
+        window.addEventListener('resize', () => {
+            const width = window.innerWidth;
+            const height = window.innerHeight;
+            renderer.setSize(width, height);
+            camera.aspect = width / height;
+            camera.updateProjectionMatrix();
+        });
+
+        animate();
+
+        fetchGameState();
+        setInterval(fetchGameState, 1000);
+
+    </script>
+</body>
+</html>
